@@ -17,7 +17,7 @@ client.on("qr", (qr) => {
 
 // Listen for business account detection
 client.on("business_account_detected", (isBusinessAccount) => {
-    console.log("Is Business Account:", isBusinessAccount);
+    console.log("Is Business Account (from event):", isBusinessAccount);
     if (isBusinessAccount) {
         console.log("The user connecting is a business account!");
         // You can implement your business-specific logic here
@@ -38,8 +38,29 @@ client.on("auth_failure", (msg) => {
 });
 
 // Listen for ready event
-client.on("ready", () => {
+client.on("ready", async () => {
     console.log("Client is ready!");
+
+    // You can also check if the account is a business account at any time
+    // after the client is ready using the isBusiness method
+    try {
+        // Wait a bit to ensure everything is fully initialized
+        console.log("Waiting 5 seconds before checking business status...");
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        const isBusinessAccount = await client.isBusiness();
+        console.log("Is Business Account (from method):", isBusinessAccount);
+
+        if (isBusinessAccount) {
+            console.log("Confirmed: This is a business account!");
+            // Implement business-specific features
+        } else {
+            console.log("Confirmed: This is a regular account.");
+            // Implement regular user features
+        }
+    } catch (error) {
+        console.error("Error checking business status:", error);
+    }
 });
 
 // Initialize the client

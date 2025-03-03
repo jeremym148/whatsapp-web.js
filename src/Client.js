@@ -323,46 +323,35 @@ class Client extends EventEmitter {
                     await this.attachEventListeners();
                 }
 
-                // Check if the authenticated user is a business account
-                try {
-                    const isBusinessAccount = await this.pupPage.evaluate(
-                        async () => {
-                            const me = window.Store.User.getMeUser();
-                            if (!me) return false;
-
-                            // Get the contact model for the current user
-                            const contact = await window.Store.Contact.get(
-                                me._serialized
-                            );
-                            if (!contact) return false;
-
-                            // Check if the contact is a business account
-                            return contact.isBusiness === true;
-                        }
-                    );
-
-                    /**
-                     * Emitted when a business account is detected during authentication
-                     * @event Client#business_account_detected
-                     * @param {boolean} isBusinessAccount - Whether the authenticated user is a business account
-                     */
-                    this.emit(
-                        Events.BUSINESS_ACCOUNT_DETECTED,
-                        isBusinessAccount
-                    );
-                } catch (error) {
-                    console.error(
-                        "Error checking business account status:",
-                        error
-                    );
-                }
-
                 /**
                  * Emitted when the client has initialized and is ready to receive messages.
                  * @event Client#ready
                  */
                 this.emit(Events.READY);
                 this.authStrategy.afterAuthReady();
+
+                // Check if the authenticated user is a business account after the client is ready
+                // This ensures all necessary components are initialized
+                setTimeout(async () => {
+                    try {
+                        const isBusinessAccount = await this.isBusiness();
+
+                        /**
+                         * Emitted when a business account is detected during authentication
+                         * @event Client#business_account_detected
+                         * @param {boolean} isBusinessAccount - Whether the authenticated user is a business account
+                         */
+                        this.emit(
+                            Events.BUSINESS_ACCOUNT_DETECTED,
+                            isBusinessAccount
+                        );
+                    } catch (error) {
+                        console.error(
+                            "Error checking business account status:",
+                            error
+                        );
+                    }
+                }, 3000); // Wait 3 seconds after ready to ensure everything is fully initialized
             }
         );
         let lastPercent = null;
@@ -2267,6 +2256,43 @@ class Client extends EventEmitter {
             }
             return false;
         }, chatId);
+    }
+
+    /**
+     * Checks if the current authenticated user is a business account
+     * @returns {Promise<boolean>} Whether the current authenticated user is a business account
+     */
+    async isBusiness() {
+        if (!this.pupPage) {
+            throw new Error("Client is not ready");
+        }
+
+        try {
+            const isBusinessAccount = await this.pupPage.evaluate(async () => {
+                if (
+                    !window.Store ||
+                    !window.Store.User ||
+                    !window.Store.Contact
+                ) {
+                    return false;
+                }
+
+                const me = window.Store.User.getMeUser();
+                if (!me) return false;
+
+                // Get the contact model for the current user
+                const contact = await window.Store.Contact.get(me._serialized);
+                if (!contact) return false;
+
+                // Check if the contact is a business account
+                return contact.isBusiness === true;
+            });
+
+            return isBusinessAccount;
+        } catch (error) {
+            console.error("Error checking business account status:", error);
+            return false;
+        }
     }
 }
 

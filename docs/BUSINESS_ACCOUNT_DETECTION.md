@@ -4,9 +4,15 @@ This feature allows you to detect if a user connecting via QR code is a business
 
 ## How it works
 
-When a user scans the QR code and authenticates, the library will check if the authenticated user is a business account and emit a `business_account_detected` event with a boolean value indicating whether the user is a business account or not.
+There are two ways to detect if the authenticated user is a business account:
+
+1. **Event-based detection**: When a user scans the QR code and authenticates, the library will check if the authenticated user is a business account and emit a `business_account_detected` event with a boolean value indicating whether the user is a business account or not.
+
+2. **Method-based detection**: You can call the `client.isBusiness()` method at any time after the client is ready to check if the authenticated user is a business account.
 
 ## Usage
+
+### Event-based detection
 
 ```javascript
 const { Client, LocalAuth } = require("whatsapp-web.js");
@@ -41,6 +47,32 @@ client.on("business_account_detected", (isBusinessAccount) => {
 client.initialize();
 ```
 
+### Method-based detection
+
+```javascript
+// Listen for ready event
+client.on("ready", async () => {
+    console.log("Client is ready!");
+
+    // You can check if the account is a business account at any time
+    // after the client is ready using the isBusiness method
+    try {
+        const isBusinessAccount = await client.isBusiness();
+        console.log("Is Business Account:", isBusinessAccount);
+
+        if (isBusinessAccount) {
+            console.log("This is a business account!");
+            // Implement business-specific features
+        } else {
+            console.log("This is a regular account.");
+            // Implement regular user features
+        }
+    } catch (error) {
+        console.error("Error checking business status:", error);
+    }
+});
+```
+
 ## Event Details
 
 ### business_account_detected
@@ -50,6 +82,18 @@ This event is emitted after authentication when the library has determined wheth
 **Parameters:**
 
 -   `isBusinessAccount` (boolean): Whether the authenticated user is a business account or not.
+
+## Method Details
+
+### client.isBusiness()
+
+This method checks if the current authenticated user is a business account.
+
+**Returns:**
+
+-   Promise<boolean>: Whether the current authenticated user is a business account or not.
+
+**Note:** It's recommended to call this method after the client is ready (after the `ready` event is emitted) to ensure all necessary components are initialized. For the most reliable results, you may want to add a small delay (e.g., 3-5 seconds) after the `ready` event before calling this method.
 
 ## Use Cases
 
