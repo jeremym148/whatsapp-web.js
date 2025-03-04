@@ -2300,6 +2300,7 @@ class Client extends EventEmitter {
      * @param {object} options - Options for retrieving the product catalog
      * @param {number} [options.limit=100] - Maximum number of products to retrieve
      * @param {boolean} [options.includeHidden=false] - Whether to include hidden products
+     * @param {number} [options.maxRetries=2] - Maximum number of retries if execution context is destroyed
      * @returns {Promise<Product[]>} Array of products
      * @throws {Error} If the user is not a business account
      */
@@ -2317,133 +2318,162 @@ class Client extends EventEmitter {
 
         const limit = options.limit || 100;
         const includeHidden = options.includeHidden || false;
+        const maxRetries = options.maxRetries || 2;
+        let retries = 0;
 
         const Product = require("./structures/Product");
 
-        try {
-            // Use a more robust approach with better error handling
-            const products = await this.pupPage
-                .evaluate(
-                    async (limit, includeHidden) => {
-                        try {
-                            // Check if the QueryProduct functionality is available
-                            if (!window.Store.QueryProduct) {
-                                return {
-                                    error: "Product catalog functionality is not available",
-                                };
-                            }
+        // Function to fetch products with retry logic
+        const fetchProducts = async () => {
+            try {
+                // Use a more robust approach with better error handling
+                const products = await this.pupPage
+                    .evaluate(
+                        async (limit, includeHidden) => {
+                            try {
+                                // Check if the QueryProduct functionality is available
+                                if (!window.Store.QueryProduct) {
+                                    return {
+                                        error: "Product catalog functionality is not available",
+                                    };
+                                }
 
-                            // Get the current user ID
-                            const currentUser = window.Store.User.getMeUser();
-                            if (!currentUser) {
-                                return {
-                                    error: "Current user not found",
-                                };
-                            }
+                                // Get the current user ID
+                                const currentUser =
+                                    window.Store.User.getMeUser();
+                                if (!currentUser) {
+                                    return {
+                                        error: "Current user not found",
+                                    };
+                                }
 
-                            // Check if the queryProductList function exists
-                            if (
-                                typeof window.Store.QueryProduct
-                                    .queryProductList !== "function"
-                            ) {
-                                return {
-                                    error: "QueryProduct.queryProductList function is not available",
-                                };
-                            }
+                                // Check if the queryProductList function exists
+                                if (
+                                    typeof window.Store.QueryProduct
+                                        .queryProductList !== "function"
+                                ) {
+                                    return {
+                                        error: "QueryProduct.queryProductList function is not available",
+                                    };
+                                }
 
-                            // Use the queryProductList function directly to avoid additional layers
-                            const result =
-                                await window.Store.QueryProduct.queryProductList(
-                                    currentUser._serialized,
-                                    [], // No specific product IDs, get all
-                                    includeHidden,
-                                    limit,
-                                    0 // No offset
+                                // Use the queryProductList function directly to avoid additional layers
+                                const result =
+                                    await window.Store.QueryProduct.queryProductList(
+                                        currentUser._serialized,
+                                        [], // No specific product IDs, get all
+                                        includeHidden,
+                                        limit,
+                                        0 // No offset
+                                    );
+
+                                if (
+                                    !result ||
+                                    !result.data ||
+                                    !Array.isArray(result.data.data)
+                                ) {
+                                    return {
+                                        error: "No product catalog found or empty catalog",
+                                    };
+                                }
+
+                                // Map the products to a simpler structure to minimize data transfer
+                                // Only include essential fields to reduce the chance of context destruction
+                                const products = result.data.data.map(
+                                    (product) => ({
+                                        id: product.id,
+                                        name: product.name,
+                                        price: product.price,
+                                        currency: product.currency,
+                                        thumbnailUrl: product.thumbnailUrl,
+                                        quantity: product.quantity || 1,
+                                    })
                                 );
 
-                            if (
-                                !result ||
-                                !result.data ||
-                                !Array.isArray(result.data.data)
-                            ) {
                                 return {
-                                    error: "No product catalog found or empty catalog",
+                                    success: true,
+                                    products: products,
+                                };
+                            } catch (err) {
+                                return {
+                                    error: `Error retrieving product catalog: ${
+                                        err.message || "Unknown error"
+                                    }`,
                                 };
                             }
+                        },
+                        limit,
+                        includeHidden
+                    )
+                    .catch((err) => {
+                        // Handle puppeteer errors like execution context destroyed
+                        console.error(
+                            "Error in getProductCatalog evaluation:",
+                            err
+                        );
+                        throw new Error(
+                            `Failed to retrieve product catalog: ${err.message}`
+                        );
+                    });
 
-                            // Map the products to a simpler structure to minimize data transfer
-                            const products = result.data.data.map(
-                                (product) => ({
-                                    id: product.id,
-                                    name: product.name,
-                                    price: product.price,
-                                    currency: product.currency,
-                                    thumbnailUrl: product.thumbnailUrl,
-                                    quantity: product.quantity || 1,
-                                })
-                            );
+                if (products.error) {
+                    throw new Error(products.error);
+                }
 
-                            return {
-                                success: true,
-                                products: products,
-                            };
-                        } catch (err) {
-                            return {
-                                error: `Error retrieving product catalog: ${
-                                    err.message || "Unknown error"
-                                }`,
-                            };
-                        }
-                    },
-                    limit,
-                    includeHidden
-                )
-                .catch((err) => {
-                    // Handle puppeteer errors like execution context destroyed
-                    console.error(
-                        "Error in getProductCatalog evaluation:",
-                        err
-                    );
+                if (!products.success || !Array.isArray(products.products)) {
                     throw new Error(
-                        `Failed to retrieve product catalog: ${err.message}`
+                        "Invalid response format from product catalog query"
                     );
-                });
+                }
 
-            if (products.error) {
-                throw new Error(products.error);
-            }
-
-            if (!products.success || !Array.isArray(products.products)) {
-                throw new Error(
-                    "Invalid response format from product catalog query"
+                return products.products.map(
+                    (product) =>
+                        new Product(this, {
+                            id: product.id,
+                            name: product.name,
+                            price: product.price,
+                            currency: product.currency,
+                            thumbnailUrl: product.thumbnailUrl,
+                            quantity: product.quantity || 1,
+                        })
                 );
-            }
+            } catch (error) {
+                // Handle specific error cases
+                if (
+                    (error.message?.includes(
+                        "Execution context was destroyed"
+                    ) ||
+                        error.message?.includes("Protocol error")) &&
+                    retries < maxRetries
+                ) {
+                    retries++;
+                    console.log(
+                        `Retrying getProductCatalog (attempt ${retries}/${maxRetries})...`
+                    );
+                    // Wait a bit before retrying to allow the context to stabilize
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    return fetchProducts(); // Recursive retry
+                }
 
-            return products.products.map(
-                (product) =>
-                    new Product(this, {
-                        id: product.id,
-                        name: product.name,
-                        price: product.price,
-                        currency: product.currency,
-                        thumbnailUrl: product.thumbnailUrl,
-                        quantity: product.quantity || 1,
-                    })
-            );
-        } catch (error) {
-            // Handle specific error cases
-            if (
-                error.message?.includes("Execution context was destroyed") ||
-                error.message?.includes("Protocol error")
-            ) {
-                throw new Error(
-                    "Failed to retrieve product catalog: The WhatsApp Web page context was destroyed. Please try again later."
-                );
-            }
+                // If we've exhausted retries or it's another type of error, rethrow
+                if (
+                    error.message?.includes(
+                        "Execution context was destroyed"
+                    ) ||
+                    error.message?.includes("Protocol error")
+                ) {
+                    throw new Error(
+                        "Failed to retrieve product catalog: The WhatsApp Web page context was destroyed. Please try again later."
+                    );
+                }
 
-            // Rethrow the original error
-            throw error;
-        }
+                // Rethrow the original error
+                throw error;
+            }
+        };
+
+        // Start the fetch process with retry logic
+        return fetchProducts();
     }
 
     /**
@@ -2591,6 +2621,146 @@ class Client extends EventEmitter {
             // Rethrow other errors
             throw error;
         }
+    }
+
+    /**
+     * Retrieves a product by its ID
+     * @param {string} productId - The ID of the product to retrieve
+     * @param {object} [options] - Options for retrieving the product
+     * @param {number} [options.maxRetries=2] - Maximum number of retries if execution context is destroyed
+     * @returns {Promise<Product>} The product
+     * @throws {Error} If the product is not found or the user is not a business account
+     */
+    async getProductById(productId, options = {}) {
+        if (!this.pupPage) {
+            throw new Error("Client is not ready");
+        }
+
+        const isBusiness = await this.isBusiness();
+        if (!isBusiness) {
+            throw new Error(
+                "This method is only available for business accounts"
+            );
+        }
+
+        if (!productId) {
+            throw new Error("Product ID is required");
+        }
+
+        const maxRetries = options.maxRetries || 2;
+        let retries = 0;
+
+        const Product = require("./structures/Product");
+
+        // Function to fetch product with retry logic
+        const fetchProduct = async () => {
+            try {
+                const result = await this.pupPage
+                    .evaluate(async (productId) => {
+                        try {
+                            // Check if the QueryProduct functionality is available
+                            if (!window.Store.QueryProduct) {
+                                return {
+                                    error: "Product catalog functionality is not available",
+                                };
+                            }
+
+                            // Check if the getProductMetadata function exists
+                            if (
+                                typeof window.WWebJS.getProductMetadata !==
+                                "function"
+                            ) {
+                                return {
+                                    error: "getProductMetadata function is not available",
+                                };
+                            }
+
+                            // Use the WWebJS utility method to get the product metadata
+                            const metadata =
+                                await window.WWebJS.getProductMetadata(
+                                    productId
+                                );
+
+                            if (!metadata) {
+                                return { error: "Product not found" };
+                            }
+
+                            return {
+                                success: true,
+                                product: {
+                                    id: metadata.id,
+                                    name: metadata.name,
+                                    description: metadata.description,
+                                    retailer_id: metadata.retailer_id,
+                                },
+                            };
+                        } catch (err) {
+                            return {
+                                error: `Error retrieving product: ${
+                                    err.message || "Unknown error"
+                                }`,
+                            };
+                        }
+                    }, productId)
+                    .catch((err) => {
+                        // Handle puppeteer errors like execution context destroyed
+                        console.error(
+                            "Error in getProductById evaluation:",
+                            err
+                        );
+                        throw new Error(
+                            `Failed to retrieve product: ${err.message}`
+                        );
+                    });
+
+                if (result.error) {
+                    throw new Error(result.error);
+                }
+
+                if (!result.success || !result.product) {
+                    throw new Error(
+                        "Invalid response format from product query"
+                    );
+                }
+
+                return new Product(this, result.product);
+            } catch (error) {
+                // Handle specific error cases
+                if (
+                    (error.message?.includes(
+                        "Execution context was destroyed"
+                    ) ||
+                        error.message?.includes("Protocol error")) &&
+                    retries < maxRetries
+                ) {
+                    retries++;
+                    console.log(
+                        `Retrying getProductById (attempt ${retries}/${maxRetries})...`
+                    );
+                    // Wait a bit before retrying to allow the context to stabilize
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    return fetchProduct(); // Recursive retry
+                }
+
+                // If we've exhausted retries or it's another type of error, rethrow
+                if (
+                    error.message?.includes(
+                        "Execution context was destroyed"
+                    ) ||
+                    error.message?.includes("Protocol error")
+                ) {
+                    throw new Error(
+                        "Failed to retrieve product: The WhatsApp Web page context was destroyed. Please try again later."
+                    );
+                }
+
+                // Rethrow the original error
+                throw error;
+            }
+        };
+
+        // Start the fetch process with retry logic
+        return fetchProduct();
     }
 }
 

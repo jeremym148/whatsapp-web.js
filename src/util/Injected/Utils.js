@@ -847,6 +847,18 @@ exports.LoadUtils = () => {
                 sellerId = currentUser._serialized;
             }
 
+            // Check if commerce features are disabled due to sanctions
+            // This check is based on the WAWebBizGatingUtils.commerceFeaturesDisabledBySanctions check in the original code
+            if (
+                window.Store.Conn &&
+                window.Store.Conn.platform &&
+                ["smba", "smbi"].indexOf(window.Store.Conn.platform) === -1
+            ) {
+                return {
+                    error: "Product catalog functionality is only available for business accounts",
+                };
+            }
+
             // Check if the queryProductList function exists
             if (
                 typeof window.Store.QueryProduct.queryProductList !== "function"
@@ -856,11 +868,16 @@ exports.LoadUtils = () => {
                 };
             }
 
+            // Prepare parameters similar to the original implementation
+            const width = 100; // Default width for thumbnails
+            const height = 100; // Default height for thumbnails
+
             // Use the queryProductList function to get the catalog
+            // This matches the implementation in the Untitled2 file
             const result = await window.Store.QueryProduct.queryProductList(
                 sellerId,
                 [], // No specific product IDs, get all
-                includeHidden,
+                includeHidden ? includeHidden : null, // directConnectionEncryptedInfo parameter
                 limit,
                 0 // No offset
             );
@@ -884,6 +901,18 @@ exports.LoadUtils = () => {
                 products: products,
             };
         } catch (err) {
+            // Check for specific error types from the original implementation
+            if (err.name === "ServerStatusCodeError") {
+                return {
+                    error: "Server error when retrieving product catalog",
+                };
+            }
+
+            // Check for E451 error (sanctions)
+            if (err.name === "E451") {
+                return { error: "Commerce features disabled by sanctions" };
+            }
+
             return {
                 error: `Error retrieving product catalog: ${
                     err.message || "Unknown error"
