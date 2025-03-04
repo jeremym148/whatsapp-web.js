@@ -829,6 +829,7 @@ exports.LoadUtils = () => {
         includeHidden = false
     ) => {
         try {
+            // Check if the QueryProduct functionality is available
             if (!window.Store.QueryProduct) {
                 return {
                     error: "Product catalog functionality is not available",
@@ -837,7 +838,22 @@ exports.LoadUtils = () => {
 
             // If no seller ID is provided, use the current user's ID
             if (!sellerId) {
-                sellerId = window.Store.Conn.wid;
+                const currentUser = window.Store.User.getMeUser();
+                if (!currentUser) {
+                    return {
+                        error: "Current user not found",
+                    };
+                }
+                sellerId = currentUser._serialized;
+            }
+
+            // Check if the queryProductList function exists
+            if (
+                typeof window.Store.QueryProduct.queryProductList !== "function"
+            ) {
+                return {
+                    error: "QueryProduct.queryProductList function is not available",
+                };
             }
 
             // Use the queryProductList function to get the catalog
@@ -853,13 +869,25 @@ exports.LoadUtils = () => {
                 return { error: "No product catalog found or empty catalog" };
             }
 
+            // Map the products to a simpler structure to minimize data transfer
+            const products = result.data.data.map((product) => ({
+                id: product.id,
+                name: product.name,
+                price: product.price,
+                currency: product.currency,
+                thumbnailUrl: product.thumbnailUrl,
+                quantity: product.quantity || 1,
+            }));
+
             return {
                 success: true,
-                products: result.data.data,
+                products: products,
             };
         } catch (err) {
             return {
-                error: `Error retrieving product catalog: ${err.message}`,
+                error: `Error retrieving product catalog: ${
+                    err.message || "Unknown error"
+                }`,
             };
         }
     };

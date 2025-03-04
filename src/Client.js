@@ -2296,12 +2296,12 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Retrieves the product catalog for the current business account
-     * @param {Object} [options] - Options for retrieving the product catalog
+     * Retrieves the product catalog for business accounts
+     * @param {object} options - Options for retrieving the product catalog
      * @param {number} [options.limit=100] - Maximum number of products to retrieve
      * @param {boolean} [options.includeHidden=false] - Whether to include hidden products
-     * @returns {Promise<Array<Product>>} Array of products in the catalog
-     * @throws {Error} If the user is not a business account or has no catalog
+     * @returns {Promise<Product[]>} Array of products
+     * @throws {Error} If the user is not a business account
      */
     async getProductCatalog(options = {}) {
         if (!this.pupPage) {
@@ -2320,40 +2320,130 @@ class Client extends EventEmitter {
 
         const Product = require("./structures/Product");
 
-        const products = await this.pupPage.evaluate(
-            async (limit, includeHidden) => {
-                try {
-                    // Use the WWebJS utility method to get the product catalog
-                    return await window.WWebJS.getProductCatalog(
-                        window.Store.User.getMeUser()._serialized,
-                        limit,
-                        includeHidden
+        try {
+            // Use a more robust approach with better error handling
+            const products = await this.pupPage
+                .evaluate(
+                    async (limit, includeHidden) => {
+                        try {
+                            // Check if the QueryProduct functionality is available
+                            if (!window.Store.QueryProduct) {
+                                return {
+                                    error: "Product catalog functionality is not available",
+                                };
+                            }
+
+                            // Get the current user ID
+                            const currentUser = window.Store.User.getMeUser();
+                            if (!currentUser) {
+                                return {
+                                    error: "Current user not found",
+                                };
+                            }
+
+                            // Check if the queryProductList function exists
+                            if (
+                                typeof window.Store.QueryProduct
+                                    .queryProductList !== "function"
+                            ) {
+                                return {
+                                    error: "QueryProduct.queryProductList function is not available",
+                                };
+                            }
+
+                            // Use the queryProductList function directly to avoid additional layers
+                            const result =
+                                await window.Store.QueryProduct.queryProductList(
+                                    currentUser._serialized,
+                                    [], // No specific product IDs, get all
+                                    includeHidden,
+                                    limit,
+                                    0 // No offset
+                                );
+
+                            if (
+                                !result ||
+                                !result.data ||
+                                !Array.isArray(result.data.data)
+                            ) {
+                                return {
+                                    error: "No product catalog found or empty catalog",
+                                };
+                            }
+
+                            // Map the products to a simpler structure to minimize data transfer
+                            const products = result.data.data.map(
+                                (product) => ({
+                                    id: product.id,
+                                    name: product.name,
+                                    price: product.price,
+                                    currency: product.currency,
+                                    thumbnailUrl: product.thumbnailUrl,
+                                    quantity: product.quantity || 1,
+                                })
+                            );
+
+                            return {
+                                success: true,
+                                products: products,
+                            };
+                        } catch (err) {
+                            return {
+                                error: `Error retrieving product catalog: ${
+                                    err.message || "Unknown error"
+                                }`,
+                            };
+                        }
+                    },
+                    limit,
+                    includeHidden
+                )
+                .catch((err) => {
+                    // Handle puppeteer errors like execution context destroyed
+                    console.error(
+                        "Error in getProductCatalog evaluation:",
+                        err
                     );
-                } catch (err) {
-                    return {
-                        error: `Error retrieving product catalog: ${err.message}`,
-                    };
-                }
-            },
-            limit,
-            includeHidden
-        );
+                    throw new Error(
+                        `Failed to retrieve product catalog: ${err.message}`
+                    );
+                });
 
-        if (products.error) {
-            throw new Error(products.error);
+            if (products.error) {
+                throw new Error(products.error);
+            }
+
+            if (!products.success || !Array.isArray(products.products)) {
+                throw new Error(
+                    "Invalid response format from product catalog query"
+                );
+            }
+
+            return products.products.map(
+                (product) =>
+                    new Product(this, {
+                        id: product.id,
+                        name: product.name,
+                        price: product.price,
+                        currency: product.currency,
+                        thumbnailUrl: product.thumbnailUrl,
+                        quantity: product.quantity || 1,
+                    })
+            );
+        } catch (error) {
+            // Handle specific error cases
+            if (
+                error.message?.includes("Execution context was destroyed") ||
+                error.message?.includes("Protocol error")
+            ) {
+                throw new Error(
+                    "Failed to retrieve product catalog: The WhatsApp Web page context was destroyed. Please try again later."
+                );
+            }
+
+            // Rethrow the original error
+            throw error;
         }
-
-        return products.products.map(
-            (product) =>
-                new Product(this, {
-                    id: product.id,
-                    name: product.name,
-                    price: product.price,
-                    currency: product.currency,
-                    thumbnailUrl: product.thumbnailUrl,
-                    quantity: product.quantity || 1,
-                })
-        );
     }
 
     /**
@@ -2430,31 +2520,75 @@ class Client extends EventEmitter {
         }
 
         try {
-            // Check if the QueryProduct functionality is available
-            const hasQueryProduct = await this.pupPage.evaluate(() => {
-                return !!window.Store.QueryProduct;
-            });
+            // Check catalog existence directly in the page context
+            const result = await this.pupPage
+                .evaluate(() => {
+                    try {
+                        // Check if the QueryProduct functionality is available
+                        if (!window.Store.QueryProduct) {
+                            return {
+                                success: false,
+                                reason: "QueryProduct not available",
+                            };
+                        }
 
-            if (!hasQueryProduct) {
+                        // Try to check if the catalog exists without actually fetching products
+                        const currentUserWid = window.Store.User.getMeUser();
+                        if (!currentUserWid) {
+                            return {
+                                success: false,
+                                reason: "Current user not found",
+                            };
+                        }
+
+                        // Check if the catalog exists by checking if the QueryProduct functionality works
+                        // This is a lightweight check that doesn't actually fetch products
+                        return {
+                            success: true,
+                            hasCatalog: window.Store.QueryProduct
+                                .queryProductList
+                                ? true
+                                : false,
+                        };
+                    } catch (err) {
+                        return {
+                            success: false,
+                            reason:
+                                err.message || "Unknown error checking catalog",
+                        };
+                    }
+                })
+                .catch((err) => {
+                    // Handle puppeteer errors like execution context destroyed
+                    console.error("Error in hasCatalog evaluation:", err);
+                    return {
+                        success: false,
+                        reason: "Execution context error",
+                    };
+                });
+
+            if (!result.success) {
+                console.warn(
+                    `Could not check catalog existence: ${result.reason}`
+                );
                 return false;
             }
 
-            // Try to get the catalog with a limit of 1 to check if it exists
-            const products = await this.getProductCatalog({ limit: 1 });
-            return products.length > 0;
+            return result.hasCatalog;
         } catch (error) {
             // If the error is about an empty catalog or functionality not available, return false
             if (
-                error.message.includes(
+                error.message?.includes(
                     "No product catalog found or empty catalog"
                 ) ||
-                error.message.includes(
+                error.message?.includes(
                     "Product catalog functionality is not available"
-                )
+                ) ||
+                error.message?.includes("Execution context was destroyed")
             ) {
                 return false;
             }
-            // Otherwise, rethrow the error
+            // Rethrow other errors
             throw error;
         }
     }

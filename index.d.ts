@@ -237,7 +237,10 @@ declare namespace WAWebJS {
             options: MembershipRequestActionOptions
         ) => Promise<Array<MembershipRequestActionResult>>;
 
-        /** Checks if the client is a business account */
+        /**
+         * Checks if the current user is a business account
+         * @returns {Promise<boolean>} Whether the current user is a business account
+         */
         isBusiness(): Promise<boolean>;
 
         /**
@@ -245,7 +248,8 @@ declare namespace WAWebJS {
          * @param {object} options - Options for retrieving the product catalog
          * @param {number} [options.limit=10] - Maximum number of products to retrieve
          * @param {boolean} [options.includeHidden=false] - Whether to include hidden products
-         * @returns {Promise<Array<Product>>} - Array of products in the catalog
+         * @returns {Promise<Product[]>} Array of products
+         * @throws {Error} If the user is not a business account
          */
         getProductCatalog(options?: {
             limit?: number;
@@ -253,15 +257,17 @@ declare namespace WAWebJS {
         }): Promise<Product[]>;
 
         /**
-         * Retrieves a specific product by its ID
+         * Retrieves a product by its ID
          * @param {string} productId - The ID of the product to retrieve
-         * @returns {Promise<Product>} - The product information
+         * @returns {Promise<Product>} The product
+         * @throws {Error} If the user is not a business account or the product is not found
          */
         getProductById(productId: string): Promise<Product>;
 
         /**
          * Checks if the business account has a product catalog
-         * @returns {Promise<boolean>} - Whether the business account has a product catalog
+         * @returns {Promise<boolean>} Whether the business account has a product catalog
+         * @throws {Error} If the user is not a business account
          */
         hasCatalog(): Promise<boolean>;
 
