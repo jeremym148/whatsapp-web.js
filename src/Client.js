@@ -2461,52 +2461,91 @@ class Client extends EventEmitter {
                                         limit
                                     );
 
-                                // Use the queryProductList function directly to avoid additional layers
-                                const result =
-                                    await window.Store.QueryProduct.queryProductList(
-                                        currentUser._serialized,
-                                        [], // No specific product IDs, get all
-                                        includeHidden ? includeHidden : null, // directConnectionEncryptedInfo parameter
-                                        limit,
-                                        0 // No offset
+                                // Use a try-catch block specifically for the queryProductList call
+                                try {
+                                    // Use the queryProductList function directly to avoid additional layers
+                                    const result =
+                                        await window.Store.QueryProduct.queryProductList(
+                                            currentUser._serialized,
+                                            [], // No specific product IDs, get all
+                                            includeHidden
+                                                ? includeHidden
+                                                : null, // directConnectionEncryptedInfo parameter
+                                            limit,
+                                            0 // No offset
+                                        );
+
+                                    // Add additional null checks
+                                    if (!result) {
+                                        if (debug)
+                                            console.error(
+                                                "[Browser] QueryProduct result is null"
+                                            );
+                                        return {
+                                            error: "QueryProduct result is null",
+                                        };
+                                    }
+
+                                    if (!result.data) {
+                                        if (debug)
+                                            console.error(
+                                                "[Browser] QueryProduct result.data is null"
+                                            );
+                                        return {
+                                            error: "QueryProduct result.data is null",
+                                        };
+                                    }
+
+                                    if (!Array.isArray(result.data.data)) {
+                                        if (debug)
+                                            console.error(
+                                                "[Browser] QueryProduct result.data.data is not an array"
+                                            );
+                                        return {
+                                            error: "No product catalog found or empty catalog",
+                                        };
+                                    }
+
+                                    if (debug)
+                                        console.log(
+                                            `[Browser] Retrieved ${result.data.data.length} products`
+                                        );
+
+                                    // Map the products to a simpler structure to minimize data transfer
+                                    // Only include essential fields to reduce the chance of context destruction
+                                    const products = result.data.data.map(
+                                        (product) => {
+                                            // Add null checks for each property
+                                            return {
+                                                id: product.id || "",
+                                                name: product.name || "",
+                                                price: product.price || "",
+                                                currency:
+                                                    product.currency || "",
+                                                thumbnailUrl:
+                                                    product.thumbnailUrl || "",
+                                                quantity: product.quantity || 1,
+                                            };
+                                        }
                                     );
 
-                                if (
-                                    !result ||
-                                    !result.data ||
-                                    !Array.isArray(result.data.data)
-                                ) {
+                                    return {
+                                        success: true,
+                                        products: products,
+                                    };
+                                } catch (queryError) {
                                     if (debug)
                                         console.error(
-                                            "[Browser] No product catalog found or empty catalog"
+                                            "[Browser] Error in queryProductList:",
+                                            queryError
                                         );
                                     return {
-                                        error: "No product catalog found or empty catalog",
+                                        error: `Error in queryProductList: ${
+                                            queryError.message ||
+                                            "Unknown error"
+                                        }`,
                                     };
                                 }
-
-                                if (debug)
-                                    console.log(
-                                        `[Browser] Retrieved ${result.data.data.length} products`
-                                    );
-
-                                // Map the products to a simpler structure to minimize data transfer
-                                // Only include essential fields to reduce the chance of context destruction
-                                const products = result.data.data.map(
-                                    (product) => ({
-                                        id: product.id,
-                                        name: product.name,
-                                        price: product.price,
-                                        currency: product.currency,
-                                        thumbnailUrl: product.thumbnailUrl,
-                                        quantity: product.quantity || 1,
-                                    })
-                                );
-
-                                return {
-                                    success: true,
-                                    products: products,
-                                };
                             } catch (err) {
                                 if (debug)
                                     console.error(
@@ -2577,6 +2616,7 @@ class Client extends EventEmitter {
                     error.message?.includes(
                         "Cannot read properties of undefined"
                     ) ||
+                    error.message?.includes("Cannot read properties of null") ||
                     error.message?.includes("QueryProduct is not available");
 
                 if (isContextError && retries < maxRetries) {
