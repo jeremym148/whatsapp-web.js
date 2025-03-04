@@ -2294,6 +2294,170 @@ class Client extends EventEmitter {
             return false;
         }
     }
+
+    /**
+     * Retrieves the product catalog for the current business account
+     * @param {Object} [options] - Options for retrieving the product catalog
+     * @param {number} [options.limit=100] - Maximum number of products to retrieve
+     * @param {boolean} [options.includeHidden=false] - Whether to include hidden products
+     * @returns {Promise<Array<Product>>} Array of products in the catalog
+     * @throws {Error} If the user is not a business account or has no catalog
+     */
+    async getProductCatalog(options = {}) {
+        if (!this.pupPage) {
+            throw new Error("Client is not ready");
+        }
+
+        const isBusiness = await this.isBusiness();
+        if (!isBusiness) {
+            throw new Error(
+                "This method is only available for business accounts"
+            );
+        }
+
+        const limit = options.limit || 100;
+        const includeHidden = options.includeHidden || false;
+
+        const Product = require("./structures/Product");
+
+        const products = await this.pupPage.evaluate(
+            async (limit, includeHidden) => {
+                try {
+                    // Use the WWebJS utility method to get the product catalog
+                    return await window.WWebJS.getProductCatalog(
+                        window.Store.User.getMeUser()._serialized,
+                        limit,
+                        includeHidden
+                    );
+                } catch (err) {
+                    return {
+                        error: `Error retrieving product catalog: ${err.message}`,
+                    };
+                }
+            },
+            limit,
+            includeHidden
+        );
+
+        if (products.error) {
+            throw new Error(products.error);
+        }
+
+        return products.products.map(
+            (product) =>
+                new Product(this, {
+                    id: product.id,
+                    name: product.name,
+                    price: product.price,
+                    currency: product.currency,
+                    thumbnailUrl: product.thumbnailUrl,
+                    quantity: product.quantity || 1,
+                })
+        );
+    }
+
+    /**
+     * Retrieves a specific product by its ID
+     * @param {string} productId - The ID of the product to retrieve
+     * @returns {Promise<Product>} The product
+     * @throws {Error} If the product is not found or the user is not a business account
+     */
+    async getProductById(productId) {
+        if (!this.pupPage) {
+            throw new Error("Client is not ready");
+        }
+
+        const isBusiness = await this.isBusiness();
+        if (!isBusiness) {
+            throw new Error(
+                "This method is only available for business accounts"
+            );
+        }
+
+        if (!productId) {
+            throw new Error("Product ID is required");
+        }
+
+        const Product = require("./structures/Product");
+
+        const result = await this.pupPage.evaluate(async (productId) => {
+            try {
+                // Use the WWebJS utility method to get the product metadata
+                const metadata = await window.WWebJS.getProductMetadata(
+                    productId
+                );
+
+                if (!metadata) {
+                    return { error: "Product not found" };
+                }
+
+                return {
+                    success: true,
+                    product: {
+                        id: metadata.id,
+                        name: metadata.name,
+                        description: metadata.description,
+                        retailer_id: metadata.retailer_id,
+                    },
+                };
+            } catch (err) {
+                return { error: `Error retrieving product: ${err.message}` };
+            }
+        }, productId);
+
+        if (result.error) {
+            throw new Error(result.error);
+        }
+
+        return new Product(this, result.product);
+    }
+
+    /**
+     * Checks if the business account has a product catalog
+     * @returns {Promise<boolean>} Whether the business account has a product catalog
+     * @throws {Error} If the user is not a business account
+     */
+    async hasCatalog() {
+        if (!this.pupPage) {
+            throw new Error("Client is not ready");
+        }
+
+        const isBusiness = await this.isBusiness();
+        if (!isBusiness) {
+            throw new Error(
+                "This method is only available for business accounts"
+            );
+        }
+
+        try {
+            // Check if the QueryProduct functionality is available
+            const hasQueryProduct = await this.pupPage.evaluate(() => {
+                return !!window.Store.QueryProduct;
+            });
+
+            if (!hasQueryProduct) {
+                return false;
+            }
+
+            // Try to get the catalog with a limit of 1 to check if it exists
+            const products = await this.getProductCatalog({ limit: 1 });
+            return products.length > 0;
+        } catch (error) {
+            // If the error is about an empty catalog or functionality not available, return false
+            if (
+                error.message.includes(
+                    "No product catalog found or empty catalog"
+                ) ||
+                error.message.includes(
+                    "Product catalog functionality is not available"
+                )
+            ) {
+                return false;
+            }
+            // Otherwise, rethrow the error
+            throw error;
+        }
+    }
 }
 
 module.exports = Client;
