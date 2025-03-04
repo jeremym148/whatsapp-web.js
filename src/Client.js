@@ -2463,15 +2463,103 @@ class Client extends EventEmitter {
 
                                 // Use a try-catch block specifically for the queryProductList call
                                 try {
-                                    // Use the queryProductList function directly to avoid additional layers
-                                    const result =
-                                        await window.Store.QueryProduct.queryProductList(
-                                            currentUser._serialized,
-                                            [], // No specific product IDs, get all
-                                            includeHidden ? true : null, // directConnectionEncryptedInfo parameter - ensure it's a boolean
-                                            limit,
-                                            0 // No offset
+                                    if (debug)
+                                        console.log(
+                                            "[Browser] Preparing parameters for queryProductList"
                                         );
+
+                                    // Ensure all parameters are of the correct type to prevent toString() errors
+                                    const sellerId = currentUser._serialized;
+                                    const productIds = []; // Empty array for all products
+                                    const directConnectionEncryptedInfo =
+                                        includeHidden === true ? true : null;
+                                    const limitValue =
+                                        typeof limit === "number" ? limit : 100;
+                                    const offsetValue = 0;
+
+                                    if (debug) {
+                                        console.log(
+                                            "[Browser] QueryProductList parameters:"
+                                        );
+                                        console.log(`- sellerId: ${sellerId}`);
+                                        console.log(
+                                            `- productIds: ${JSON.stringify(
+                                                productIds
+                                            )}`
+                                        );
+                                        console.log(
+                                            `- directConnectionEncryptedInfo: ${directConnectionEncryptedInfo}`
+                                        );
+                                        console.log(`- limit: ${limitValue}`);
+                                        console.log(`- offset: ${offsetValue}`);
+                                    }
+
+                                    // Use a safer approach to call the function
+                                    const queryProductListFn =
+                                        window.Store.QueryProduct
+                                            .queryProductList;
+                                    if (
+                                        typeof queryProductListFn !== "function"
+                                    ) {
+                                        if (debug)
+                                            console.error(
+                                                "[Browser] queryProductList is not a function"
+                                            );
+                                        return {
+                                            error: "QueryProduct.queryProductList is not a function",
+                                        };
+                                    }
+
+                                    // Fallback implementation if the direct call fails
+                                    let result;
+                                    try {
+                                        // First try with call() method to preserve context
+                                        result = await queryProductListFn.call(
+                                            window.Store.QueryProduct,
+                                            sellerId,
+                                            productIds,
+                                            directConnectionEncryptedInfo,
+                                            limitValue,
+                                            offsetValue
+                                        );
+                                    } catch (directCallError) {
+                                        if (debug)
+                                            console.error(
+                                                "[Browser] Direct call failed, trying alternative approach:",
+                                                directCallError
+                                            );
+
+                                        // Try alternative approach using the WWebJS utility
+                                        if (
+                                            typeof window.WWebJS
+                                                .getProductCatalog ===
+                                            "function"
+                                        ) {
+                                            if (debug)
+                                                console.log(
+                                                    "[Browser] Using WWebJS.getProductCatalog as fallback"
+                                                );
+                                            const catalogResult =
+                                                await window.WWebJS.getProductCatalog(
+                                                    sellerId,
+                                                    limitValue,
+                                                    directConnectionEncryptedInfo ===
+                                                        true
+                                                );
+
+                                            if (catalogResult.error) {
+                                                return catalogResult;
+                                            }
+
+                                            result = {
+                                                data: {
+                                                    data: catalogResult.products,
+                                                },
+                                            };
+                                        } else {
+                                            throw directCallError;
+                                        }
+                                    }
 
                                     // Add additional null checks
                                     if (!result) {

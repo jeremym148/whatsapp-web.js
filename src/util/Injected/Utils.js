@@ -860,39 +860,50 @@ exports.LoadUtils = () => {
             }
 
             // Check if the queryProductList function exists
-            if (
-                typeof window.Store.QueryProduct.queryProductList !== "function"
-            ) {
+            const queryProductListFn =
+                window.Store.QueryProduct.queryProductList;
+            if (typeof queryProductListFn !== "function") {
                 return {
                     error: "QueryProduct.queryProductList function is not available",
                 };
             }
 
-            // Prepare parameters similar to the original implementation
-            const width = 100; // Default width for thumbnails
-            const height = 100; // Default height for thumbnails
+            // Ensure all parameters are of the correct type to prevent toString() errors
+            const productIds = []; // Empty array for all products
+            const directConnectionEncryptedInfo =
+                includeHidden === true ? true : null;
+            const limitValue = typeof limit === "number" ? limit : 100;
+            const offsetValue = 0;
 
-            // Use the queryProductList function to get the catalog
-            // This matches the implementation in the Untitled2 file
-            const result = await window.Store.QueryProduct.queryProductList(
+            // Use a safer approach to call the function with explicit parameters
+            const result = await queryProductListFn.call(
+                window.Store.QueryProduct,
                 sellerId,
-                [], // No specific product IDs, get all
-                includeHidden ? includeHidden : null, // directConnectionEncryptedInfo parameter
-                limit,
-                0 // No offset
+                productIds,
+                directConnectionEncryptedInfo,
+                limitValue,
+                offsetValue
             );
 
-            if (!result || !result.data || !Array.isArray(result.data.data)) {
+            if (!result) {
+                return { error: "QueryProduct result is null" };
+            }
+
+            if (!result.data) {
+                return { error: "QueryProduct result.data is null" };
+            }
+
+            if (!Array.isArray(result.data.data)) {
                 return { error: "No product catalog found or empty catalog" };
             }
 
             // Map the products to a simpler structure to minimize data transfer
             const products = result.data.data.map((product) => ({
-                id: product.id,
-                name: product.name,
-                price: product.price,
-                currency: product.currency,
-                thumbnailUrl: product.thumbnailUrl,
+                id: product.id || "",
+                name: product.name || "",
+                price: product.price || "",
+                currency: product.currency || "",
+                thumbnailUrl: product.thumbnailUrl || "",
                 quantity: product.quantity || 1,
             }));
 
