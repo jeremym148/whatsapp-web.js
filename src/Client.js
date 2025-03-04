@@ -2301,16 +2301,26 @@ class Client extends EventEmitter {
      * @param {number} [options.limit=100] - Maximum number of products to retrieve
      * @param {boolean} [options.includeHidden=false] - Whether to include hidden products
      * @param {number} [options.maxRetries=2] - Maximum number of retries if execution context is destroyed
+     * @param {number} [options.retryDelay=1500] - Delay in milliseconds between retries
+     * @param {boolean} [options.debug=false] - Enable detailed debug logging
      * @returns {Promise<Product[]>} Array of products
      * @throws {Error} If the user is not a business account
      */
     async getProductCatalog(options = {}) {
+        console.log("[getProductCatalog] Starting catalog retrieval");
+
         if (!this.pupPage) {
+            console.error("[getProductCatalog] Client is not ready");
             throw new Error("Client is not ready");
         }
 
         const isBusiness = await this.isBusiness();
+        console.log(
+            `[getProductCatalog] isBusiness check result: ${isBusiness}`
+        );
+
         if (!isBusiness) {
+            console.error("[getProductCatalog] Not a business account");
             throw new Error(
                 "This method is only available for business accounts"
             );
@@ -2319,20 +2329,100 @@ class Client extends EventEmitter {
         const limit = options.limit || 100;
         const includeHidden = options.includeHidden || false;
         const maxRetries = options.maxRetries || 2;
+        const retryDelay = options.retryDelay || 1500; // Longer delay to ensure Store is ready
+        const debug = options.debug || false;
         let retries = 0;
+
+        console.log(
+            `[getProductCatalog] Configuration: limit=${limit}, includeHidden=${includeHidden}, maxRetries=${maxRetries}, retryDelay=${retryDelay}, debug=${debug}`
+        );
 
         const Product = require("./structures/Product");
 
         // Function to fetch products with retry logic
         const fetchProducts = async () => {
             try {
+                console.log(
+                    `[getProductCatalog] Attempt ${retries + 1}/${
+                        maxRetries + 1
+                    }`
+                );
+
+                // If we're retrying, first check if Store is available
+                if (retries > 0) {
+                    console.log(
+                        "[getProductCatalog] Retry attempt - checking if Store is initialized"
+                    );
+
+                    // Check if Store is initialized
+                    const storeReady = await this.pupPage
+                        .evaluate(() => {
+                            return (
+                                typeof window.Store !== "undefined" &&
+                                window.Store !== null &&
+                                typeof window.Store.QueryProduct !== "undefined"
+                            );
+                        })
+                        .catch((err) => {
+                            console.error(
+                                "[getProductCatalog] Error checking Store readiness:",
+                                err
+                            );
+                            return false;
+                        });
+
+                    console.log(
+                        `[getProductCatalog] Store ready check result: ${storeReady}`
+                    );
+
+                    if (!storeReady) {
+                        console.log(
+                            "[getProductCatalog] Store not ready, waiting for initialization..."
+                        );
+                        // Wait for Store to be initialized
+                        try {
+                            await this.pupPage.waitForFunction(
+                                'typeof window.Store !== "undefined" && window.Store !== null && typeof window.Store.QueryProduct !== "undefined"',
+                                { timeout: 5000 }
+                            );
+                            console.log(
+                                "[getProductCatalog] Store initialized successfully"
+                            );
+                        } catch (err) {
+                            console.error(
+                                "[getProductCatalog] Timeout waiting for Store initialization:",
+                                err
+                            );
+                            throw new Error(
+                                "Store initialization timeout: QueryProduct is not available"
+                            );
+                        }
+                    }
+                }
+
+                console.log(
+                    "[getProductCatalog] Evaluating product catalog in page context"
+                );
+
                 // Use a more robust approach with better error handling
                 const products = await this.pupPage
                     .evaluate(
-                        async (limit, includeHidden) => {
+                        async (limit, includeHidden, debug) => {
+                            if (debug)
+                                console.log(
+                                    "[Browser] Starting product catalog evaluation"
+                                );
+
                             try {
-                                // Check if the QueryProduct functionality is available
-                                if (!window.Store.QueryProduct) {
+                                // Double-check if the QueryProduct functionality is available
+                                if (
+                                    !window.Store ||
+                                    !window.Store.QueryProduct
+                                ) {
+                                    if (debug)
+                                        console.error(
+                                            "[Browser] Store or QueryProduct not available"
+                                        );
                                     return {
                                         error: "Product catalog functionality is not available",
                                     };
@@ -2342,6 +2432,10 @@ class Client extends EventEmitter {
                                 const currentUser =
                                     window.Store.User.getMeUser();
                                 if (!currentUser) {
+                                    if (debug)
+                                        console.error(
+                                            "[Browser] Current user not found"
+                                        );
                                     return {
                                         error: "Current user not found",
                                     };
@@ -2352,17 +2446,27 @@ class Client extends EventEmitter {
                                     typeof window.Store.QueryProduct
                                         .queryProductList !== "function"
                                 ) {
+                                    if (debug)
+                                        console.error(
+                                            "[Browser] queryProductList function not available"
+                                        );
                                     return {
                                         error: "QueryProduct.queryProductList function is not available",
                                     };
                                 }
+
+                                if (debug)
+                                    console.log(
+                                        "[Browser] Calling queryProductList with limit:",
+                                        limit
+                                    );
 
                                 // Use the queryProductList function directly to avoid additional layers
                                 const result =
                                     await window.Store.QueryProduct.queryProductList(
                                         currentUser._serialized,
                                         [], // No specific product IDs, get all
-                                        includeHidden,
+                                        includeHidden ? includeHidden : null, // directConnectionEncryptedInfo parameter
                                         limit,
                                         0 // No offset
                                     );
@@ -2372,10 +2476,19 @@ class Client extends EventEmitter {
                                     !result.data ||
                                     !Array.isArray(result.data.data)
                                 ) {
+                                    if (debug)
+                                        console.error(
+                                            "[Browser] No product catalog found or empty catalog"
+                                        );
                                     return {
                                         error: "No product catalog found or empty catalog",
                                     };
                                 }
+
+                                if (debug)
+                                    console.log(
+                                        `[Browser] Retrieved ${result.data.data.length} products`
+                                    );
 
                                 // Map the products to a simpler structure to minimize data transfer
                                 // Only include essential fields to reduce the chance of context destruction
@@ -2395,6 +2508,11 @@ class Client extends EventEmitter {
                                     products: products,
                                 };
                             } catch (err) {
+                                if (debug)
+                                    console.error(
+                                        "[Browser] Error retrieving product catalog:",
+                                        err
+                                    );
                                 return {
                                     error: `Error retrieving product catalog: ${
                                         err.message || "Unknown error"
@@ -2403,12 +2521,13 @@ class Client extends EventEmitter {
                             }
                         },
                         limit,
-                        includeHidden
+                        includeHidden,
+                        debug
                     )
                     .catch((err) => {
                         // Handle puppeteer errors like execution context destroyed
                         console.error(
-                            "Error in getProductCatalog evaluation:",
+                            "[getProductCatalog] Error in page evaluation:",
                             err
                         );
                         throw new Error(
@@ -2417,16 +2536,22 @@ class Client extends EventEmitter {
                     });
 
                 if (products.error) {
+                    console.error(
+                        `[getProductCatalog] Error from page context: ${products.error}`
+                    );
                     throw new Error(products.error);
                 }
 
                 if (!products.success || !Array.isArray(products.products)) {
+                    console.error(
+                        "[getProductCatalog] Invalid response format from product catalog query"
+                    );
                     throw new Error(
                         "Invalid response format from product catalog query"
                     );
                 }
 
-                return products.products.map(
+                const productInstances = products.products.map(
                     (product) =>
                         new Product(this, {
                             id: product.id,
@@ -2437,37 +2562,47 @@ class Client extends EventEmitter {
                             quantity: product.quantity || 1,
                         })
                 );
+
+                console.log(
+                    `[getProductCatalog] Successfully retrieved ${productInstances.length} products`
+                );
+                return productInstances;
             } catch (error) {
                 // Handle specific error cases
-                if (
-                    (error.message?.includes(
+                const isContextError =
+                    error.message?.includes(
                         "Execution context was destroyed"
                     ) ||
-                        error.message?.includes("Protocol error")) &&
-                    retries < maxRetries
-                ) {
+                    error.message?.includes("Protocol error") ||
+                    error.message?.includes(
+                        "Cannot read properties of undefined"
+                    ) ||
+                    error.message?.includes("QueryProduct is not available");
+
+                if (isContextError && retries < maxRetries) {
                     retries++;
                     console.log(
-                        `Retrying getProductCatalog (attempt ${retries}/${maxRetries})...`
+                        `[getProductCatalog] Retrying (attempt ${retries}/${maxRetries})...`
                     );
-                    // Wait a bit before retrying to allow the context to stabilize
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    // Wait longer before retrying to allow the context to stabilize and Store to be reinitialized
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, retryDelay)
+                    );
                     return fetchProducts(); // Recursive retry
                 }
 
                 // If we've exhausted retries or it's another type of error, rethrow
-                if (
-                    error.message?.includes(
-                        "Execution context was destroyed"
-                    ) ||
-                    error.message?.includes("Protocol error")
-                ) {
+                if (isContextError) {
+                    console.error(
+                        "[getProductCatalog] Max retries reached with context errors"
+                    );
                     throw new Error(
-                        "Failed to retrieve product catalog: The WhatsApp Web page context was destroyed. Please try again later."
+                        "Failed to retrieve product catalog: The WhatsApp Web page context was destroyed or Store is not available. Please try again later."
                     );
                 }
 
                 // Rethrow the original error
+                console.error("[getProductCatalog] Unhandled error:", error);
                 throw error;
             }
         };
@@ -2621,146 +2756,6 @@ class Client extends EventEmitter {
             // Rethrow other errors
             throw error;
         }
-    }
-
-    /**
-     * Retrieves a product by its ID
-     * @param {string} productId - The ID of the product to retrieve
-     * @param {object} [options] - Options for retrieving the product
-     * @param {number} [options.maxRetries=2] - Maximum number of retries if execution context is destroyed
-     * @returns {Promise<Product>} The product
-     * @throws {Error} If the product is not found or the user is not a business account
-     */
-    async getProductById(productId, options = {}) {
-        if (!this.pupPage) {
-            throw new Error("Client is not ready");
-        }
-
-        const isBusiness = await this.isBusiness();
-        if (!isBusiness) {
-            throw new Error(
-                "This method is only available for business accounts"
-            );
-        }
-
-        if (!productId) {
-            throw new Error("Product ID is required");
-        }
-
-        const maxRetries = options.maxRetries || 2;
-        let retries = 0;
-
-        const Product = require("./structures/Product");
-
-        // Function to fetch product with retry logic
-        const fetchProduct = async () => {
-            try {
-                const result = await this.pupPage
-                    .evaluate(async (productId) => {
-                        try {
-                            // Check if the QueryProduct functionality is available
-                            if (!window.Store.QueryProduct) {
-                                return {
-                                    error: "Product catalog functionality is not available",
-                                };
-                            }
-
-                            // Check if the getProductMetadata function exists
-                            if (
-                                typeof window.WWebJS.getProductMetadata !==
-                                "function"
-                            ) {
-                                return {
-                                    error: "getProductMetadata function is not available",
-                                };
-                            }
-
-                            // Use the WWebJS utility method to get the product metadata
-                            const metadata =
-                                await window.WWebJS.getProductMetadata(
-                                    productId
-                                );
-
-                            if (!metadata) {
-                                return { error: "Product not found" };
-                            }
-
-                            return {
-                                success: true,
-                                product: {
-                                    id: metadata.id,
-                                    name: metadata.name,
-                                    description: metadata.description,
-                                    retailer_id: metadata.retailer_id,
-                                },
-                            };
-                        } catch (err) {
-                            return {
-                                error: `Error retrieving product: ${
-                                    err.message || "Unknown error"
-                                }`,
-                            };
-                        }
-                    }, productId)
-                    .catch((err) => {
-                        // Handle puppeteer errors like execution context destroyed
-                        console.error(
-                            "Error in getProductById evaluation:",
-                            err
-                        );
-                        throw new Error(
-                            `Failed to retrieve product: ${err.message}`
-                        );
-                    });
-
-                if (result.error) {
-                    throw new Error(result.error);
-                }
-
-                if (!result.success || !result.product) {
-                    throw new Error(
-                        "Invalid response format from product query"
-                    );
-                }
-
-                return new Product(this, result.product);
-            } catch (error) {
-                // Handle specific error cases
-                if (
-                    (error.message?.includes(
-                        "Execution context was destroyed"
-                    ) ||
-                        error.message?.includes("Protocol error")) &&
-                    retries < maxRetries
-                ) {
-                    retries++;
-                    console.log(
-                        `Retrying getProductById (attempt ${retries}/${maxRetries})...`
-                    );
-                    // Wait a bit before retrying to allow the context to stabilize
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
-                    return fetchProduct(); // Recursive retry
-                }
-
-                // If we've exhausted retries or it's another type of error, rethrow
-                if (
-                    error.message?.includes(
-                        "Execution context was destroyed"
-                    ) ||
-                    error.message?.includes("Protocol error")
-                ) {
-                    throw new Error(
-                        "Failed to retrieve product: The WhatsApp Web page context was destroyed. Please try again later."
-                    );
-                }
-
-                // Rethrow the original error
-                throw error;
-            }
-        };
-
-        // Start the fetch process with retry logic
-        return fetchProduct();
     }
 }
 
