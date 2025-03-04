@@ -2468,9 +2468,7 @@ class Client extends EventEmitter {
                                         await window.Store.QueryProduct.queryProductList(
                                             currentUser._serialized,
                                             [], // No specific product IDs, get all
-                                            includeHidden
-                                                ? includeHidden
-                                                : null, // directConnectionEncryptedInfo parameter
+                                            includeHidden ? true : null, // directConnectionEncryptedInfo parameter - ensure it's a boolean
                                             limit,
                                             0 // No offset
                                         );
