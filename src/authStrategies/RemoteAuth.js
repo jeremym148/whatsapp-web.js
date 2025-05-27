@@ -178,7 +178,7 @@ class RemoteAuth extends BaseAuthStrategy {
         const stream = fs.createWriteStream(`${this.sessionName}.zip`);
 
         await fs.copy(this.userDataDir, this.tempDir).catch(() => {});
-        await this.deleteMetadata();
+        await this.deleteMetadata().catch(() => {});
         return new Promise((resolve, reject) => {
             archive
                 .directory(this.tempDir, false)
